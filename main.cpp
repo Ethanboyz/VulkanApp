@@ -35,6 +35,9 @@ private:
 
     vk::raii::SwapchainKHR swap_chain_ = nullptr;
     std::vector<vk::Image> swap_chain_images_;
+    vk::Format swap_chain_format_ = vk::Format::eUndefined;
+    vk::Extent2D swap_chain_extent_;
+    std::vector<vk::raii::ImageView> swap_chain_image_views_;
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void createInstance() {
@@ -120,7 +123,7 @@ private:
         throw std::runtime_error("No GPUs with Vulkan >=1.3 support available!");
     }
 
-    // Query and configure swap chain details
+    // Query and configure swap chain details to create a new swap chain
     void create_swap_chain() {
         const auto surface_capabilities = physical_device_.getSurfaceCapabilitiesKHR(surface_);
         vk::Extent2D swap_chain_extent;
@@ -189,6 +192,8 @@ private:
 
         swap_chain_ = vk::raii::SwapchainKHR(device_, swapchain_create_info);
         swap_chain_images_ = swap_chain_.getImages();
+        swap_chain_format_ = chosen_format.format;
+        swap_chain_extent_ = swap_chain_extent;
     }
 
     // Create a new logical device assuming a physical device was picked, enabling device-layer extensions and setting up its graphics command queue
@@ -273,6 +278,29 @@ private:
         surface_ = vk::raii::SurfaceKHR(instance_, surface);
     }
 
+    // Creates an image view for every swap chain image
+    void create_image_views() {
+        swap_chain_image_views_.clear();
+        vk::ImageViewCreateInfo image_view_create_info {
+            .viewType = vk::ImageViewType::e2D,
+            .format = swap_chain_format_,
+            .subresourceRange = {
+                vk::ImageAspectFlagBits::eColor,
+                0,
+                1,
+                0,
+                1
+            }
+        };
+
+        // Add swap chain images to image views
+        for (const auto& image : swap_chain_images_) {
+            image_view_create_info.image = image;
+            swap_chain_image_views_.emplace_back(device_, image_view_create_info);
+        }
+    }
+
+    // Initialize the glfw window
     void init_window() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -286,6 +314,7 @@ private:
         pick_physical_device();
         create_logical_device();
         create_swap_chain();
+        create_image_views();
     }
 
     void main_loop() {
