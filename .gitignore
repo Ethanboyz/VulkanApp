@@ -1,0 +1,21 @@
+# Ignore compiled and build files
+*.o
+*.x
+main
+/build/
+/bin/
+/Vulkan-Tutorial/
+Makefile
+
+# Ignore profiling files
+callgrind.*
+
+# Ignore text/log files
+*.log
+*.txt
+!CMakeLists.txt
+*.output
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
