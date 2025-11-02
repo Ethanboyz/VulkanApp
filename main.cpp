@@ -21,13 +21,20 @@ public:
 private:
     vk::raii::Context context_;
     vk::raii::Instance instance_ = nullptr;
+
     GLFWwindow* window_ = nullptr;
     vk::raii::SurfaceKHR surface_ = nullptr;
     vk::raii::PhysicalDevice physical_device_ = nullptr;
     vk::raii::Device device_ = nullptr;         // Logical device
     vk::PhysicalDeviceFeatures device_features_{};
+
     vk::Queue graphics_queue_;                  // Interface to the device's graphics command queue
+    uint32_t graphics_queue_index_{};
     vk::Queue present_queue_;                   // Interface to the device's present command queue
+    uint32_t present_queue_index_{};
+
+    vk::raii::SwapchainKHR swap_chain_ = nullptr;
+    std::vector<vk::Image> swap_chain_images_;
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void createInstance() {
@@ -113,6 +120,77 @@ private:
         throw std::runtime_error("No GPUs with Vulkan >=1.3 support available!");
     }
 
+    // Query and configure swap chain details
+    void create_swap_chain() {
+        const auto surface_capabilities = physical_device_.getSurfaceCapabilitiesKHR(surface_);
+        vk::Extent2D swap_chain_extent;
+        auto swap_chain_min_image_count = std::max(3u, surface_capabilities.minImageCount);
+
+        // Make sure we didn't set swap_chain_min_image_count to be greater than the max (if specified) supported by the surface
+        if (surface_capabilities.maxImageCount > 0 && swap_chain_min_image_count > surface_capabilities.maxImageCount) {
+            swap_chain_min_image_count = surface_capabilities.maxImageCount;
+        }
+
+        // Choose a surface format, prefer SRGB color space (otherwise just use the first available format)
+        const auto available_formats = physical_device_.getSurfaceFormatsKHR(surface_);
+        auto chosen_format = available_formats[0];
+        for (const auto& available_format : available_formats) {
+            if (available_format.format == vk::Format::eB8G8R8A8Srgb && available_format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
+                chosen_format = available_format;
+            }
+        }
+
+        // Choose a presentation mode, prefer mailbox but use FIFO if not available
+        const auto available_present_modes = physical_device_.getSurfacePresentModesKHR(surface_);
+        auto chosen_present_mode = vk::PresentModeKHR::eFifo;
+        for (const auto& available_present_mode : available_present_modes) {
+            if (available_present_mode == vk::PresentModeKHR::eMailbox) {
+                chosen_present_mode = available_present_mode;
+            }
+        }
+
+        // Configure the swap chain image resolution, matching it to the glfw framebuffer size
+        const bool image_size_already_specified = surface_capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max();
+        if (image_size_already_specified) {
+            swap_chain_extent = surface_capabilities.currentExtent;
+        } else {
+            int width, height;
+            glfwGetFramebufferSize(window_, &width, &height);       // Window size in pixel coordinates
+            swap_chain_extent = vk::Extent2D{
+                std::clamp<uint32_t>(width, surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width),
+                std::clamp<uint32_t>(height, surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height)
+            };
+        }
+
+        // Put together everything into the new swap chain
+        vk::SwapchainCreateInfoKHR swapchain_create_info {
+            .flags = vk::SwapchainCreateFlagsKHR(),
+            .surface = surface_,
+            .minImageCount = swap_chain_min_image_count,
+            .imageFormat = chosen_format.format,
+            .imageColorSpace = chosen_format.colorSpace,
+            .imageExtent = swap_chain_extent,
+            .imageArrayLayers = 1,
+            .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+            .imageSharingMode = vk::SharingMode::eExclusive,
+            .preTransform = surface_capabilities.currentTransform,
+            .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+            .presentMode = chosen_present_mode,
+            .clipped = true,
+            .oldSwapchain = nullptr
+        };
+        // Use concurrent sharing mode if graphics and present queue are separate (no ownership handling required but slower)
+        const uint32_t queue_family_indices[] = {graphics_queue_index_, present_queue_index_};
+        if (graphics_queue_index_ != present_queue_index_) {
+            swapchain_create_info.imageSharingMode = vk::SharingMode::eConcurrent;
+            swapchain_create_info.queueFamilyIndexCount = 2;
+            swapchain_create_info.pQueueFamilyIndices = queue_family_indices;
+        }
+
+        swap_chain_ = vk::raii::SwapchainKHR(device_, swapchain_create_info);
+        swap_chain_images_ = swap_chain_.getImages();
+    }
+
     // Create a new logical device assuming a physical device was picked, enabling device-layer extensions and setting up its graphics command queue
     void create_logical_device() {
         // Search for a graphics and a present capable queue, prefer one queue that supports both capabilities
@@ -136,11 +214,14 @@ private:
         if (graphics_queue_index == queue_families.size() || present_queue_index == queue_families.size()) {
             throw std::runtime_error("Selected GPU does not support graphics or present capabilities!");
         }
+        graphics_queue_index_ = graphics_queue_index;
+        present_queue_index_ = present_queue_index;
 
+        float queue_priority = 1.f;
         vk::DeviceQueueCreateInfo device_queue_create_info {
             .queueFamilyIndex = graphics_queue_index,
             .queueCount = 1,
-            .pQueuePriorities = new float(0.f)
+            .pQueuePriorities = &queue_priority
         };
 
         // Enable 1.0+ device features w/ a structure chain (three feature structures w/ initializers)
@@ -186,8 +267,7 @@ private:
     // Create new window surface
     void create_surface() {
         VkSurfaceKHR surface;
-        const VkResult result = glfwCreateWindowSurface(*instance_, window_, nullptr, &surface);
-        if (result != VK_SUCCESS) {
+        if (const VkResult result = glfwCreateWindowSurface(*instance_, window_, nullptr, &surface); result != VK_SUCCESS) {
             throw std::runtime_error("Failed to create window surface: ERROR CODE " + std::to_string(result));
         }
         surface_ = vk::raii::SurfaceKHR(instance_, surface);
@@ -205,6 +285,7 @@ private:
         create_surface();
         pick_physical_device();
         create_logical_device();
+        create_swap_chain();
     }
 
     void main_loop() {
