@@ -19,13 +19,15 @@ public:
     }
 
 private:
-    GLFWwindow* window_ = nullptr;
     vk::raii::Context context_;
     vk::raii::Instance instance_ = nullptr;
+    GLFWwindow* window_ = nullptr;
+    vk::raii::SurfaceKHR surface_ = nullptr;
     vk::raii::PhysicalDevice physical_device_ = nullptr;
     vk::raii::Device device_ = nullptr;         // Logical device
     vk::PhysicalDeviceFeatures device_features_{};
     vk::Queue graphics_queue_;                  // Interface to the device's graphics command queue
+    vk::Queue present_queue_;                   // Interface to the device's present command queue
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void createInstance() {
@@ -111,26 +113,34 @@ private:
         throw std::runtime_error("No GPUs with Vulkan >=1.3 support available!");
     }
 
-    // Find queue families of the physical device w/ graphics capabilities and return its index
-    [[nodiscard]] uint32_t find_queue_families() const {
-        std::vector<vk::QueueFamilyProperties> queue_families = physical_device_.getQueueFamilyProperties();
-        const auto graphics_queue_family = std::ranges::find_if(
-            queue_families,
-            [](const auto& queue_family_property) {
-                return static_cast<bool>(queue_family_property.queueFlags & vk::QueueFlagBits::eGraphics);
-            }
-        );
-        return static_cast<uint32_t>(std::distance(queue_families.begin(), graphics_queue_family));
-    }
-
     // Create a new logical device assuming a physical device was picked, enabling device-layer extensions and setting up its graphics command queue
     void create_logical_device() {
-        auto queue_family_properties = physical_device_.getQueueFamilyProperties();
-        uint32_t graphics_index = find_queue_families();
+        // Search for a graphics and a present capable queue, prefer one queue that supports both capabilities
+        const auto queue_families = physical_device_.getQueueFamilyProperties();
+        uint32_t graphics_queue_index = queue_families.size();
+        uint32_t present_queue_index = queue_families.size();
+        for (int index = 0; index < queue_families.size(); index++) {
+            const bool supports_graphics = static_cast<bool>(queue_families[index].queueFlags & vk::QueueFlagBits::eGraphics);
+            const bool supports_present = physical_device_.getSurfaceSupportKHR(index, surface_);
+            if (supports_graphics && supports_present) {
+                graphics_queue_index = index;
+                present_queue_index = index;
+                break;
+            }
+            if (supports_graphics) {
+                graphics_queue_index = index;
+            } else if (supports_present) {
+                present_queue_index = index;
+            }
+        }
+        if (graphics_queue_index == queue_families.size() || present_queue_index == queue_families.size()) {
+            throw std::runtime_error("Selected GPU does not support graphics or present capabilities!");
+        }
+
         vk::DeviceQueueCreateInfo device_queue_create_info {
-            .queueFamilyIndex = graphics_index,
+            .queueFamilyIndex = graphics_queue_index,
             .queueCount = 1,
-            .pQueuePriorities = new float(1.0)
+            .pQueuePriorities = new float(0.f)
         };
 
         // Enable 1.0+ device features w/ a structure chain (three feature structures w/ initializers)
@@ -147,7 +157,7 @@ private:
             vk::KHRSynchronization2ExtensionName,
             vk::KHRCreateRenderpass2ExtensionName
         };
-        auto device_extension_properties = physical_device_.enumerateDeviceExtensionProperties();
+        const auto device_extension_properties = physical_device_.enumerateDeviceExtensionProperties();
         for (const auto& device_extension : device_extensions) {
             bool supported = std::ranges::any_of(
                 device_extension_properties,
@@ -161,7 +171,7 @@ private:
         }
 
         // Create the logical device
-        vk::DeviceCreateInfo device_create_info {
+        const vk::DeviceCreateInfo device_create_info {
             .pNext = &feature_chain.get<vk::PhysicalDeviceFeatures2>(),     // Points to full structure chain of features
             .queueCreateInfoCount = device_queue_create_info.queueCount,
             .pQueueCreateInfos = &device_queue_create_info,
@@ -169,7 +179,18 @@ private:
             .ppEnabledExtensionNames = device_extensions.data()
         };
         device_ = vk::raii::Device(physical_device_, device_create_info);
-        graphics_queue_ = vk::raii::Queue(device_, graphics_index, 0);  // Assuming only one queue from this family will be used
+        graphics_queue_ = vk::raii::Queue(device_, graphics_queue_index, 0);  // Assuming only one queue from this family will be used
+        present_queue_ = vk::raii::Queue(device_, present_queue_index, 0);
+    }
+
+    // Create new window surface
+    void create_surface() {
+        VkSurfaceKHR surface;
+        const VkResult result = glfwCreateWindowSurface(*instance_, window_, nullptr, &surface);
+        if (result != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create window surface: ERROR CODE " + std::to_string(result));
+        }
+        surface_ = vk::raii::SurfaceKHR(instance_, surface);
     }
 
     void init_window() {
@@ -178,8 +199,10 @@ private:
         glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
         window_ = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "HelloTriangleApp", nullptr, nullptr);
     }
+
     void init_vulkan() {
         createInstance();
+        create_surface();
         pick_physical_device();
         create_logical_device();
     }
