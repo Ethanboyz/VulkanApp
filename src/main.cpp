@@ -42,6 +42,7 @@ private:
     std::vector<vk::raii::ImageView> swap_chain_image_views_;
 
     vk::raii::PipelineLayout pipeline_layout_ = nullptr;
+    vk::raii::Pipeline graphics_pipeline_ = nullptr;
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void createInstance() {
@@ -233,12 +234,28 @@ private:
             .pQueuePriorities = &queue_priority
         };
 
-        // Enable 1.0+ device features w/ a structure chain (three feature structures w/ initializers)
-        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> feature_chain = {
+        // Enable 1.0+ device features w/ a structure chain (4 feature structures w/ initializers), check if they are supported
+        vk::StructureChain<
+            vk::PhysicalDeviceFeatures2,
+            vk::PhysicalDeviceVulkan11Features,
+            vk::PhysicalDeviceVulkan13Features,
+            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
+        > feature_chain = {
             {},
+            {.shaderDrawParameters = true},
             {.dynamicRendering = true},
             {.extendedDynamicState = true}
         };
+        auto supported_features = physical_device_.getFeatures2<
+            vk::PhysicalDeviceFeatures2,
+            vk::PhysicalDeviceVulkan11Features,
+            vk::PhysicalDeviceVulkan13Features,
+            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+        if (!supported_features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters
+            || !supported_features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering
+            || !supported_features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState) {
+            throw std::runtime_error("Selected GPU does not support all required extensions!");
+        }
 
         // Enable device extensions and check if they are supported by the physical device
         std::vector device_extensions = {
@@ -413,13 +430,13 @@ private:
         };
         pipeline_layout_ = vk::raii::PipelineLayout{device_, pipeline_layout_create_info};
 
-        vk::PipelineRenderingCreateInfo pipeline_rendering_create_info {    // Allows for dynamic (real-time) rendering
+        vk::PipelineRenderingCreateInfo pipeline_rendering_create_info {    // Allows dynamic rendering
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &swap_chain_format_
         };
-        std::cout << sizeof(shader_stages) << std::endl;
         vk::GraphicsPipelineCreateInfo graphics_pipeline_create_info {
-            .stageCount = sizeof(shader_stages),
+            .pNext = &pipeline_rendering_create_info,
+            .stageCount = 2,
             .pStages = shader_stages,
             .pVertexInputState = &vertex_input_create_info,
             .pInputAssemblyState = &input_assembly,
@@ -429,8 +446,12 @@ private:
             .pColorBlendState = &color_blend_create_info,
             .pDynamicState = &dynamic_state,
             .layout = pipeline_layout_,
-            .renderPass = nullptr
+            .renderPass = nullptr,
+            .basePipelineHandle = nullptr,
+            .basePipelineIndex = -1
         };
+
+        graphics_pipeline_ = vk::raii::Pipeline{device_, nullptr, graphics_pipeline_create_info};
     }
 
     // Initialize the glfw window
