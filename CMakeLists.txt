@@ -24,12 +24,14 @@ endif()
 function(add_slang_shader_target TARGET)
     cmake_parse_arguments(SHADER "" "" "SOURCES" ${ARGN})
 
-    set(SHADERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+    set(SHADERS_SRC_DIR  ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+    set(SHADERS_BIN_DIR  ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+
     set(ENTRY_POINTS -entry vertex_main -entry fragment_main)
 
     add_custom_command(
-        OUTPUT ${SHADERS_DIR}/slang.spv
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_DIR}
+        OUTPUT ${SHADERS_BIN_DIR}/slang.spv
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADERS_BIN_DIR}
         COMMAND ${CMAKE_COMMAND} -E env
         "LD_LIBRARY_PATH=$ENV{VULKAN_SDK}/lib:$ENV{LD_LIBRARY_PATH}"
         ${SLANGC_EXECUTABLE}
@@ -39,15 +41,15 @@ function(add_slang_shader_target TARGET)
         -emit-spirv-directly
         -fvk-use-entrypoint-name
         ${ENTRY_POINTS}
-        -o ${SHADERS_DIR}/slang.spv
-        WORKING_DIRECTORY ${SHADERS_DIR}
+        -o ${SHADERS_BIN_DIR}/slang.spv
+        WORKING_DIRECTORY ${SHADERS_SRC_DIR}
         DEPENDS ${SHADER_SOURCES}
         COMMENT "Compiling Slang Shaders..."
         VERBATIM
     )
 
     add_custom_target(${TARGET}
-        DEPENDS ${SHADERS_DIR}/slang.spv
+            DEPENDS ${SHADERS_BIN_DIR}/slang.spv
     )
 endfunction()
 set(SHADER_SLANG_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shaders/shader.slang)

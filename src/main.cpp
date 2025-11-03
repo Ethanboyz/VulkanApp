@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 static constexpr int WINDOW_WIDTH{800};
@@ -39,6 +40,8 @@ private:
     vk::Format swap_chain_format_ = vk::Format::eUndefined;
     vk::Extent2D swap_chain_extent_;
     std::vector<vk::raii::ImageView> swap_chain_image_views_;
+
+    vk::raii::PipelineLayout pipeline_layout_ = nullptr;
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void createInstance() {
@@ -303,6 +306,9 @@ private:
     // Read file into a vector of bytes
     static std::vector<char> read_file(const std::string& filename) {
         std::ifstream file{filename, std::ios::ate | std::ios::binary};    // Open in binary mode, seek to end of file
+        if (!file) {
+            throw std::runtime_error("Failed to open file " + filename);
+        }
         const auto filesize = file.tellg();
         std::vector<char> buffer(filesize);
 
@@ -322,9 +328,15 @@ private:
 
     // Initialize the graphics rasterization pipeline
     void create_graphics_pipeline() {
-        const auto shaders = read_file("shaders/shader.spv");
-        const auto shader_module = create_shader_module(shaders);
+        vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
+            .topology = vk::PrimitiveTopology::eTriangleList
+        };
 
+        vk::PipelineVertexInputStateCreateInfo vertex_input_create_info;
+
+        // Load shader programs
+        const auto shaders = read_file("shaders/slang.spv");
+        const auto shader_module = create_shader_module(shaders);
         const vk::PipelineShaderStageCreateInfo vertex_shader_stage_create_info {
             .stage = vk::ShaderStageFlagBits::eVertex,
             .module = shader_module,
@@ -335,7 +347,90 @@ private:
             .module = shader_module,
             .pName = "fragment_main"
         };
-        vk::PipelineShaderStageCreateInfo shader_stages[] = {vertex_shader_stage_create_info, fragment_shader_stage_create_info};
+        const vk::PipelineShaderStageCreateInfo shader_stages[] = {vertex_shader_stage_create_info, fragment_shader_stage_create_info};
+
+        // Viewport and scissor setup, mark them as dynamic for flexibility
+        vk::Viewport viewport{
+            .x = 0.f,
+            .y = 0.f,
+            .width = static_cast<float>(swap_chain_extent_.width),
+            .height = static_cast<float>(swap_chain_extent_.height),
+            .minDepth = 0.f,
+            .maxDepth = 1.f
+        };
+        // Scissor rectangle should cover the entire framebuffer
+        vk::Rect2D scissor_rectangle{
+            .offset = vk::Offset2D{0, 0},
+            .extent = swap_chain_extent_
+        };
+        const std::vector dynamic_states = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+        const vk::PipelineDynamicStateCreateInfo dynamic_state = {
+            .dynamicStateCount = static_cast<uint32_t>(dynamic_states.size()),
+            .pDynamicStates = dynamic_states.data()
+        };
+        constexpr vk::PipelineViewportStateCreateInfo viewport_state_create_info {
+            .viewportCount = 1,
+            .scissorCount = 1
+        };
+
+        // Set up the rasterizer
+        constexpr vk::PipelineRasterizationStateCreateInfo rasterization_create_info = {
+            .depthClampEnable = vk::False,
+            .rasterizerDiscardEnable = vk::False,
+            .polygonMode = vk::PolygonMode::eFill,
+            .cullMode = vk::CullModeFlagBits::eBack,
+            .frontFace = vk::FrontFace::eClockwise,
+            .depthBiasEnable = vk::False,
+            .depthBiasSlopeFactor = 1.f,
+            .lineWidth = 1.f
+        };
+
+        // Disable multisampling for now
+        constexpr vk::PipelineMultisampleStateCreateInfo multisample_create_info {
+            .rasterizationSamples = vk::SampleCountFlagBits::e1,
+            .sampleShadingEnable = vk::False
+        };
+
+        // Color blending
+        vk::PipelineColorBlendAttachmentState color_blend_attachment;
+        color_blend_attachment.colorWriteMask =
+            vk::ColorComponentFlagBits::eR
+            | vk::ColorComponentFlagBits::eG
+         | vk::ColorComponentFlagBits::eB
+         | vk::ColorComponentFlagBits::eA;
+        color_blend_attachment.blendEnable = vk::False;
+        const vk::PipelineColorBlendStateCreateInfo color_blend_create_info {
+            .logicOpEnable = vk::False,
+            .logicOp = vk::LogicOp::eCopy,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment
+        };
+
+        // Pipeline layout creation and render pass
+        constexpr vk::PipelineLayoutCreateInfo pipeline_layout_create_info = {
+            .setLayoutCount = 0,
+            .pushConstantRangeCount = 0
+        };
+        pipeline_layout_ = vk::raii::PipelineLayout{device_, pipeline_layout_create_info};
+
+        vk::PipelineRenderingCreateInfo pipeline_rendering_create_info {    // Allows for dynamic (real-time) rendering
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &swap_chain_format_
+        };
+        std::cout << sizeof(shader_stages) << std::endl;
+        vk::GraphicsPipelineCreateInfo graphics_pipeline_create_info {
+            .stageCount = sizeof(shader_stages),
+            .pStages = shader_stages,
+            .pVertexInputState = &vertex_input_create_info,
+            .pInputAssemblyState = &input_assembly,
+            .pViewportState = &viewport_state_create_info,
+            .pRasterizationState = &rasterization_create_info,
+            .pMultisampleState = &multisample_create_info,
+            .pColorBlendState = &color_blend_create_info,
+            .pDynamicState = &dynamic_state,
+            .layout = pipeline_layout_,
+            .renderPass = nullptr
+        };
     }
 
     // Initialize the glfw window
@@ -353,6 +448,7 @@ private:
         create_logical_device();
         create_swap_chain();
         create_image_views();
+        create_graphics_pipeline();
     }
 
     void main_loop() {
