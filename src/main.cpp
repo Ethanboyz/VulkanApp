@@ -369,20 +369,7 @@ private:
         };
         const vk::PipelineShaderStageCreateInfo shader_stages[] = {vertex_shader_stage_create_info, fragment_shader_stage_create_info};
 
-        // Viewport and scissor setup, mark them as dynamic for flexibility
-        vk::Viewport viewport{
-            .x = 0.f,
-            .y = 0.f,
-            .width = static_cast<float>(swap_chain_extent_.width),
-            .height = static_cast<float>(swap_chain_extent_.height),
-            .minDepth = 0.f,
-            .maxDepth = 1.f
-        };
-        // Scissor rectangle should cover the entire framebuffer
-        vk::Rect2D scissor_rectangle{
-            .offset = vk::Offset2D{0, 0},
-            .extent = swap_chain_extent_
-        };
+        // Mark viewport and scissor as dynamic for flexibility
         const std::vector dynamic_states = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
         const vk::PipelineDynamicStateCreateInfo dynamic_state = {
             .dynamicStateCount = static_cast<uint32_t>(dynamic_states.size()),
@@ -511,9 +498,11 @@ private:
         command_buffer_.pipelineBarrier2(dependency_info);
     }
 
-    // Record commands to the allocated command pool buffer
+    // Record commands to the allocated command pool buffer through the graphics pipeline
     void record_command_buffer(const uint32_t swap_chain_image_index) {
         command_buffer_.begin({});      // Start recording the allocated command buffer
+
+        // Transition swap chain image to color attachment layout
         transition_image_layout(
             swap_chain_image_index,
             vk::ImageLayout::eUndefined,
@@ -523,6 +512,62 @@ private:
             vk::PipelineStageFlagBits2::eTopOfPipe,
             vk::PipelineStageFlagBits2::eColorAttachmentOutput
         );
+
+        // Set up color attachment, we want to wipe the specified swap chain image black before rendering and storing it
+        constexpr vk::ClearValue clear_color = vk::ClearColorValue(0.f, 0.f, 0.f, 1.f);
+        const vk::RenderingAttachmentInfo rendering_attachment_info {
+            .imageView = swap_chain_image_views_[swap_chain_image_index],
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = clear_color
+        };
+
+        // Set up rendering
+        const vk::RenderingInfo rendering_info {
+            .renderArea = {
+                .offset = {0, 0},
+                .extent = swap_chain_extent_
+            },
+            .layerCount = 1,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &rendering_attachment_info
+        };
+        command_buffer_.beginRendering(rendering_info);
+        command_buffer_.bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline_);
+
+        const auto viewport = vk::Viewport(
+            0.f,
+            0.f,
+            static_cast<float>(swap_chain_extent_.width),
+            static_cast<float>(swap_chain_extent_.height),
+            0.f,
+            1.f
+        );
+        const auto scissors = vk::Rect2D{
+            .offset = vk::Offset2D(0, 0),
+            .extent = swap_chain_extent_
+        };
+        command_buffer_.setViewport(0, viewport);
+        command_buffer_.setScissor(0, scissors);
+
+        command_buffer_.draw(3, 1, 0, 0);
+
+        // Done rendering
+        command_buffer_.endRendering();
+
+        // Transition swap chain image to present src layout
+        transition_image_layout(
+            swap_chain_image_index,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::ImageLayout::ePresentSrcKHR,
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            {},
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::PipelineStageFlagBits2::eBottomOfPipe
+        );
+
+        command_buffer_.end();
     }
 
     // Initialize the glfw window
