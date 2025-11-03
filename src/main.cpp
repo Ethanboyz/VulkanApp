@@ -44,8 +44,11 @@ private:
     vk::raii::PipelineLayout pipeline_layout_ = nullptr;
     vk::raii::Pipeline graphics_pipeline_ = nullptr;
 
+    vk::raii::CommandPool command_pool_ = nullptr;
+    vk::raii::CommandBuffer command_buffer_ = nullptr;
+
     // Create vk instance, check for glfw extensions and validation layer support, if needed
-    void createInstance() {
+    void create_instance() {
         constexpr vk::ApplicationInfo app_info {
             .pApplicationName = "Hello Triangle",
             .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
@@ -450,8 +453,76 @@ private:
             .basePipelineHandle = nullptr,
             .basePipelineIndex = -1
         };
-
         graphics_pipeline_ = vk::raii::Pipeline{device_, nullptr, graphics_pipeline_create_info};
+    }
+
+    // Create the command pool for the graphics queue family
+    void create_command_pool() {
+        vk::CommandPoolCreateInfo command_pool_create_info {
+            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = graphics_queue_index_
+        };
+        command_pool_ = {device_, command_pool_create_info};
+    }
+
+    // Allocates a command buffer from the command pool
+    void create_command_buffer() {
+        vk::CommandBufferAllocateInfo command_buffer_allocate_info {
+            .commandPool = command_pool_,
+            .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = 1
+        };
+        command_buffer_ = std::move(vk::raii::CommandBuffers(device_, command_buffer_allocate_info).front());
+    }
+
+    // Transition the image layout from one layout to another
+    void transition_image_layout(
+        const uint32_t swap_chain_image_index,
+        const vk::ImageLayout old_layout,
+        const vk::ImageLayout new_layout,
+        const vk::AccessFlags2 src_access_mask,
+        const vk::AccessFlags2 dst_access_mask,
+        const vk::PipelineStageFlags2 src_stage_mask,
+        const vk::PipelineStageFlags2 dst_stage_mask
+    ) const {
+        const vk::ImageMemoryBarrier2 image_memory_barrier = {
+            .srcStageMask = src_stage_mask,
+            .srcAccessMask = src_access_mask,
+            .dstStageMask = dst_stage_mask,
+            .dstAccessMask = dst_access_mask,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = swap_chain_images_[swap_chain_image_index],
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        const vk::DependencyInfo dependency_info = {
+            .dependencyFlags = {},
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &image_memory_barrier
+        };
+        command_buffer_.pipelineBarrier2(dependency_info);
+    }
+
+    // Record commands to the allocated command pool buffer
+    void record_command_buffer(const uint32_t swap_chain_image_index) {
+        command_buffer_.begin({});      // Start recording the allocated command buffer
+        transition_image_layout(
+            swap_chain_image_index,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            {},
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput
+        );
     }
 
     // Initialize the glfw window
@@ -463,13 +534,15 @@ private:
     }
 
     void init_vulkan() {
-        createInstance();
+        create_instance();
         create_surface();
         pick_physical_device();
         create_logical_device();
         create_swap_chain();
         create_image_views();
         create_graphics_pipeline();
+        create_command_pool();
+        create_command_buffer();
     }
 
     void main_loop() {
