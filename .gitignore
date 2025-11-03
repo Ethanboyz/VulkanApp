@@ -1,6 +1,7 @@
 # Ignore compiled and build files
 *.o
 *.x
+*.spv
 main
 /build/
 /bin/
@@ -19,3 +20,6 @@ callgrind.*
 # Ignore IDE-specific files
 .vscode/
 .idea/
+
+# Ignore misc files
+*.sh

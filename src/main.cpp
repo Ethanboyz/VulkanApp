@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
+#include <fstream>
 
 static constexpr int WINDOW_WIDTH{800};
 static constexpr int WINDOW_HEIGHT{600};
@@ -293,11 +294,48 @@ private:
             }
         };
 
-        // Add swap chain images to image views
         for (const auto& image : swap_chain_images_) {
             image_view_create_info.image = image;
             swap_chain_image_views_.emplace_back(device_, image_view_create_info);
         }
+    }
+
+    // Read file into a vector of bytes
+    static std::vector<char> read_file(const std::string& filename) {
+        std::ifstream file{filename, std::ios::ate | std::ios::binary};    // Open in binary mode, seek to end of file
+        const auto filesize = file.tellg();
+        std::vector<char> buffer(filesize);
+
+        file.seekg(0, std::ios::beg);
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        file.close();
+        return buffer;
+    }
+
+    [[nodiscard]] vk::raii::ShaderModule create_shader_module(const std::vector<char>& spv_code) const {
+        const vk::ShaderModuleCreateInfo shader_module_create_info {
+            .codeSize = spv_code.size() * sizeof(char),
+            .pCode = reinterpret_cast<const uint32_t*>(spv_code.data()),
+        };
+        return {device_, shader_module_create_info};
+    }
+
+    // Initialize the graphics rasterization pipeline
+    void create_graphics_pipeline() {
+        const auto shaders = read_file("shaders/shader.spv");
+        const auto shader_module = create_shader_module(shaders);
+
+        const vk::PipelineShaderStageCreateInfo vertex_shader_stage_create_info {
+            .stage = vk::ShaderStageFlagBits::eVertex,
+            .module = shader_module,
+            .pName = "vertex_main"
+        };
+        const vk::PipelineShaderStageCreateInfo fragment_shader_stage_create_info {
+            .stage = vk::ShaderStageFlagBits::eFragment,
+            .module = shader_module,
+            .pName = "fragment_main"
+        };
+        vk::PipelineShaderStageCreateInfo shader_stages[] = {vertex_shader_stage_create_info, fragment_shader_stage_create_info};
     }
 
     // Initialize the glfw window
