@@ -47,6 +47,10 @@ private:
     vk::raii::CommandPool command_pool_ = nullptr;
     vk::raii::CommandBuffer command_buffer_ = nullptr;
 
+    vk::raii::Semaphore present_complete_semaphore_ = nullptr;
+    vk::raii::Semaphore render_complete_semaphore_ = nullptr;
+    vk::raii::Fence draw_fence_ = nullptr;
+
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void create_instance() {
         constexpr vk::ApplicationInfo app_info {
@@ -237,7 +241,7 @@ private:
             .pQueuePriorities = &queue_priority
         };
 
-        // Enable 1.0+ device features w/ a structure chain (4 feature structures w/ initializers), check if they are supported
+        // Enable 1.0+ device features w/ a structure chain (feature structures w/ initializers), check if they are supported
         vk::StructureChain<
             vk::PhysicalDeviceFeatures2,
             vk::PhysicalDeviceVulkan11Features,
@@ -246,7 +250,7 @@ private:
         > feature_chain = {
             {},
             {.shaderDrawParameters = true},
-            {.dynamicRendering = true},
+            {.synchronization2 = true, .dynamicRendering = true},
             {.extendedDynamicState = true}
         };
         auto supported_features = physical_device_.getFeatures2<
@@ -255,6 +259,7 @@ private:
             vk::PhysicalDeviceVulkan13Features,
             vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
         if (!supported_features.get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters
+            || !supported_features.get<vk::PhysicalDeviceVulkan13Features>().synchronization2
             || !supported_features.get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering
             || !supported_features.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState) {
             throw std::runtime_error("Selected GPU does not support all required extensions!");
@@ -454,7 +459,7 @@ private:
 
     // Allocates a command buffer from the command pool
     void create_command_buffer() {
-        vk::CommandBufferAllocateInfo command_buffer_allocate_info {
+        const vk::CommandBufferAllocateInfo command_buffer_allocate_info {
             .commandPool = command_pool_,
             .level = vk::CommandBufferLevel::ePrimary,
             .commandBufferCount = 1
@@ -499,7 +504,7 @@ private:
     }
 
     // Record commands to the allocated command pool buffer through the graphics pipeline
-    void record_command_buffer(const uint32_t swap_chain_image_index) {
+    void record_command_buffer(const uint32_t swap_chain_image_index) const {
         command_buffer_.begin({});      // Start recording the allocated command buffer
 
         // Transition swap chain image to color attachment layout
@@ -570,6 +575,49 @@ private:
         command_buffer_.end();
     }
 
+    // Initialize the necessary semaphores and fences for ordered frame draws
+    void create_sync_objects() {
+        present_complete_semaphore_ = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
+        render_complete_semaphore_ = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
+
+        constexpr vk::FenceCreateInfo fence_create_info = {
+            .flags = vk::FenceCreateFlagBits::eSignaled
+        };
+        draw_fence_ = vk::raii::Fence(device_, fence_create_info);
+    }
+
+    // Complete the render of a single frame
+    void draw_frame() const {
+        auto [result, swap_chain_image_index] = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphore_, nullptr);
+        record_command_buffer(swap_chain_image_index);
+        device_.resetFences(*draw_fence_);
+
+        // Queue submission and synchronization
+        constexpr vk::PipelineStageFlags pipeline_stage_flags{vk::PipelineStageFlagBits::eColorAttachmentOutput};
+        const vk::SubmitInfo submit_info = {
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &*present_complete_semaphore_,
+            .pWaitDstStageMask = &pipeline_stage_flags,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &*command_buffer_,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &*render_complete_semaphore_
+        };
+        graphics_queue_.submit(submit_info, *draw_fence_);
+
+        // Wait until the GPU is done rendering the frame, then present it
+        while (device_.waitForFences(*draw_fence_, vk::True, UINT64_MAX) == vk::Result::eTimeout) {}
+
+        const vk::PresentInfoKHR present_info_khr = {
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &*render_complete_semaphore_,
+            .swapchainCount = 1,
+            .pSwapchains = &*swap_chain_,
+            .pImageIndices = &swap_chain_image_index
+        };
+        result = present_queue_.presentKHR(present_info_khr);
+    }
+
     // Initialize the glfw window
     void init_window() {
         glfwInit();
@@ -588,11 +636,13 @@ private:
         create_graphics_pipeline();
         create_command_pool();
         create_command_buffer();
+        create_sync_objects();
     }
 
-    void main_loop() {
+    void main_loop() const {
         while (!glfwWindowShouldClose(window_)) {
             glfwPollEvents();
+            draw_frame();
         }
     }
 
