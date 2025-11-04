@@ -10,6 +10,7 @@
 
 static constexpr int WINDOW_WIDTH{800};
 static constexpr int WINDOW_HEIGHT{600};
+static constexpr int MAX_FRAMES_IN_FLIGHT{2};
 
 class HelloTriangleApplication {
 public:
@@ -27,12 +28,12 @@ private:
     GLFWwindow* window_ = nullptr;
     vk::raii::SurfaceKHR surface_ = nullptr;
     vk::raii::PhysicalDevice physical_device_ = nullptr;
-    vk::raii::Device device_ = nullptr;         // Logical device
+    vk::raii::Device device_ = nullptr;                             // Logical device
     vk::PhysicalDeviceFeatures device_features_{};
 
-    vk::Queue graphics_queue_;                  // Interface to the device's graphics command queue
+    vk::Queue graphics_queue_;                                      // Interface to the device's graphics command queue
     uint32_t graphics_queue_index_{};
-    vk::Queue present_queue_;                   // Interface to the device's present command queue
+    vk::Queue present_queue_;                                       // Interface to the device's present command queue
     uint32_t present_queue_index_{};
 
     vk::raii::SwapchainKHR swap_chain_ = nullptr;
@@ -45,11 +46,13 @@ private:
     vk::raii::Pipeline graphics_pipeline_ = nullptr;
 
     vk::raii::CommandPool command_pool_ = nullptr;
-    vk::raii::CommandBuffer command_buffer_ = nullptr;
+    std::vector<vk::raii::CommandBuffer> command_buffers_;          // One command buffer per in-flight frame
 
-    vk::raii::Semaphore present_complete_semaphore_ = nullptr;
-    vk::raii::Semaphore render_complete_semaphore_ = nullptr;
-    vk::raii::Fence draw_fence_ = nullptr;
+    // Draw frame synchronization objects for queue submits and frame presents (one set per in-flight frame)
+    std::vector<vk::raii::Semaphore> present_complete_semaphores_;  // For each in-flight frame, signaled when frame is presented to screen
+    std::vector<vk::raii::Semaphore> render_complete_semaphores_;   // For each in-flight frame, signaled when frame is rendered, ready to be presented
+    std::vector<vk::raii::Fence> in_flight_fences_;                 // For each in-flight frame, indicates when draw is done
+    uint32_t current_frame_{};                                       // Current in-flight frame
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void create_instance() {
@@ -457,14 +460,15 @@ private:
         command_pool_ = {device_, command_pool_create_info};
     }
 
-    // Allocates a command buffer from the command pool
-    void create_command_buffer() {
+    // Allocates one command buffer per intended in-flight frame from the command pool
+    void create_command_buffers() {
+        command_buffers_.clear();
         const vk::CommandBufferAllocateInfo command_buffer_allocate_info {
             .commandPool = command_pool_,
             .level = vk::CommandBufferLevel::ePrimary,
-            .commandBufferCount = 1
+            .commandBufferCount = MAX_FRAMES_IN_FLIGHT
         };
-        command_buffer_ = std::move(vk::raii::CommandBuffers(device_, command_buffer_allocate_info).front());
+        command_buffers_ = vk::raii::CommandBuffers(device_, command_buffer_allocate_info);
     }
 
     // Transition the image layout from one layout to another
@@ -500,12 +504,12 @@ private:
             .imageMemoryBarrierCount = 1,
             .pImageMemoryBarriers = &image_memory_barrier
         };
-        command_buffer_.pipelineBarrier2(dependency_info);
+        command_buffers_[current_frame_].pipelineBarrier2(dependency_info);
     }
 
     // Record commands to the allocated command pool buffer through the graphics pipeline
     void record_command_buffer(const uint32_t swap_chain_image_index) const {
-        command_buffer_.begin({});      // Start recording the allocated command buffer
+        command_buffers_[current_frame_].begin({});      // Start recording the allocated command buffer
 
         // Transition swap chain image to color attachment layout
         transition_image_layout(
@@ -538,8 +542,8 @@ private:
             .colorAttachmentCount = 1,
             .pColorAttachments = &rendering_attachment_info
         };
-        command_buffer_.beginRendering(rendering_info);
-        command_buffer_.bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline_);
+        command_buffers_[current_frame_].beginRendering(rendering_info);
+        command_buffers_[current_frame_].bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline_);
 
         const auto viewport = vk::Viewport(
             0.f,
@@ -553,13 +557,13 @@ private:
             .offset = vk::Offset2D(0, 0),
             .extent = swap_chain_extent_
         };
-        command_buffer_.setViewport(0, viewport);
-        command_buffer_.setScissor(0, scissors);
+        command_buffers_[current_frame_].setViewport(0, viewport);
+        command_buffers_[current_frame_].setScissor(0, scissors);
 
-        command_buffer_.draw(3, 1, 0, 0);
+        command_buffers_[current_frame_].draw(3, 1, 0, 0);
 
         // Done rendering
-        command_buffer_.endRendering();
+        command_buffers_[current_frame_].endRendering();
 
         // Transition swap chain image to present src layout
         transition_image_layout(
@@ -572,50 +576,63 @@ private:
             vk::PipelineStageFlagBits2::eBottomOfPipe
         );
 
-        command_buffer_.end();
+        command_buffers_[current_frame_].end();
     }
 
     // Initialize the necessary semaphores and fences for ordered frame draws
     void create_sync_objects() {
-        present_complete_semaphore_ = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
-        render_complete_semaphore_ = vk::raii::Semaphore(device_, vk::SemaphoreCreateInfo());
+        present_complete_semaphores_.clear();
+        render_complete_semaphores_.clear();
+        in_flight_fences_.clear();
 
         constexpr vk::FenceCreateInfo fence_create_info = {
             .flags = vk::FenceCreateFlagBits::eSignaled
         };
-        draw_fence_ = vk::raii::Fence(device_, fence_create_info);
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            present_complete_semaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+            render_complete_semaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+            in_flight_fences_.emplace_back(device_, fence_create_info);
+        }
     }
 
     // Complete the render of a single frame
-    void draw_frame() const {
-        auto [result, swap_chain_image_index] = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphore_, nullptr);
-        record_command_buffer(swap_chain_image_index);
-        device_.resetFences(*draw_fence_);
+    void draw_frame() {
+        // Wait until the GPU is done rendering the previous frame
+        while (device_.waitForFences(*in_flight_fences_[current_frame_], vk::True, UINT64_MAX) == vk::Result::eTimeout) {}
 
-        // Queue submission and synchronization
+        // Acquire image from swap chain, write command
+        auto [result, swap_chain_image_index] = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphores_[current_frame_], nullptr);
+        device_.resetFences(*in_flight_fences_[current_frame_]);
+
+        command_buffers_[current_frame_].reset();
+        record_command_buffer(swap_chain_image_index);
+
+        // Submit command buffer to the graphics queue
         constexpr vk::PipelineStageFlags pipeline_stage_flags{vk::PipelineStageFlagBits::eColorAttachmentOutput};
         const vk::SubmitInfo submit_info = {
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &*present_complete_semaphore_,
+            .pWaitSemaphores = &*present_complete_semaphores_[current_frame_],
             .pWaitDstStageMask = &pipeline_stage_flags,
             .commandBufferCount = 1,
-            .pCommandBuffers = &*command_buffer_,
+            .pCommandBuffers = &*command_buffers_[current_frame_],
             .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &*render_complete_semaphore_
+            .pSignalSemaphores = &*render_complete_semaphores_[current_frame_]
         };
-        graphics_queue_.submit(submit_info, *draw_fence_);
+        graphics_queue_.submit(submit_info, *in_flight_fences_[current_frame_]);
 
-        // Wait until the GPU is done rendering the frame, then present it
-        while (device_.waitForFences(*draw_fence_, vk::True, UINT64_MAX) == vk::Result::eTimeout) {}
-
+        // Tell the GPU to present the result, but only after the rendering is complete
         const vk::PresentInfoKHR present_info_khr = {
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &*render_complete_semaphore_,
+            .pWaitSemaphores = &*render_complete_semaphores_[current_frame_],
             .swapchainCount = 1,
             .pSwapchains = &*swap_chain_,
             .pImageIndices = &swap_chain_image_index
         };
         result = present_queue_.presentKHR(present_info_khr);
+        if (result != vk::Result::eSuccess) {
+            throw std::runtime_error("vk::Queue::presentKHR returned non-success: " + vk::to_string(result));
+        }
+        current_frame_ = (current_frame_ + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     // Initialize the glfw window
@@ -635,18 +652,19 @@ private:
         create_image_views();
         create_graphics_pipeline();
         create_command_pool();
-        create_command_buffer();
+        create_command_buffers();
         create_sync_objects();
     }
 
-    void main_loop() const {
+    void main_loop() {
         while (!glfwWindowShouldClose(window_)) {
             glfwPollEvents();
             draw_frame();
         }
+        device_.waitIdle();
     }
 
-    void cleanup() {
+    void cleanup() const {
         glfwDestroyWindow(window_);
         glfwTerminate();
     }
