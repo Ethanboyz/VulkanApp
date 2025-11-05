@@ -52,7 +52,8 @@ private:
     std::vector<vk::raii::Semaphore> present_complete_semaphores_;  // For each in-flight frame, signaled when frame is presented to screen
     std::vector<vk::raii::Semaphore> render_complete_semaphores_;   // For each in-flight frame, signaled when frame is rendered, ready to be presented
     std::vector<vk::raii::Fence> in_flight_fences_;                 // For each in-flight frame, indicates when draw is done
-    uint32_t current_frame_{};                                       // Current in-flight frame
+    uint32_t current_frame_{};                                      // Current in-flight frame
+    bool framebuffer_resized = false;                               // True if the resize has occurred
 
     // Create vk instance, check for glfw extensions and validation layer support, if needed
     void create_instance() {
@@ -522,7 +523,7 @@ private:
             vk::PipelineStageFlagBits2::eColorAttachmentOutput
         );
 
-        // Set up color attachment, we want to wipe the specified swap chain image black before rendering and storing it
+        // Set up color attachment (we want to wipe the specified swap chain image black before rendering and storing it)
         constexpr vk::ClearValue clear_color = vk::ClearColorValue(0.f, 0.f, 0.f, 1.f);
         const vk::RenderingAttachmentInfo rendering_attachment_info {
             .imageView = swap_chain_image_views_[swap_chain_image_index],
@@ -602,8 +603,16 @@ private:
 
         // Acquire image from swap chain, write command
         auto [result, swap_chain_image_index] = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphores_[current_frame_], nullptr);
-        device_.resetFences(*in_flight_fences_[current_frame_]);
+        if (result == vk::Result::eErrorOutOfDateKHR) {
+            framebuffer_resized = false;
+            recreate_swap_chain();
+            return;
+        }
+        if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+            throw std::runtime_error("Failed to acquire next swap chain image!");
+        }
 
+        device_.resetFences(*in_flight_fences_[current_frame_]);
         command_buffers_[current_frame_].reset();
         record_command_buffer(swap_chain_image_index);
 
@@ -629,18 +638,48 @@ private:
             .pImageIndices = &swap_chain_image_index
         };
         result = present_queue_.presentKHR(present_info_khr);
-        if (result != vk::Result::eSuccess) {
-            throw std::runtime_error("vk::Queue::presentKHR returned non-success: " + vk::to_string(result));
+        if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebuffer_resized) {
+            recreate_swap_chain();
+        } else if (result != vk::Result::eSuccess) {
+            throw std::runtime_error("Failed to present swap chain image!");
         }
         current_frame_ = (current_frame_ + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    // Cleans up the swap chain so it can be recreated
+    void cleanup_swap_chain() {
+        swap_chain_image_views_.clear();
+        swap_chain_ = nullptr;
+    }
+
+    // Redo the swap chain creation steps plus its image views
+    void recreate_swap_chain() {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window_, &width, &height);
+        while (width == 0 || height == 0) {     // Window is minimized
+            glfwGetFramebufferSize(window_, &width, &height);
+            glfwWaitEvents();
+        }
+        device_.waitIdle();
+        cleanup_swap_chain();
+        create_swap_chain();
+        create_image_views();
+    }
+
+    // Should be called when the window resizing occurs
+    static void framebuffer_resize_callback(GLFWwindow* window, int window_width, int window_height) {
+        const auto app = static_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        app->framebuffer_resized = true;
     }
 
     // Initialize the glfw window
     void init_window() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         window_ = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "HelloTriangleApp", nullptr, nullptr);
+        glfwSetWindowUserPointer(window_, this);
+        glfwSetFramebufferSizeCallback(window_, framebuffer_resize_callback);
     }
 
     void init_vulkan() {
@@ -664,7 +703,8 @@ private:
         device_.waitIdle();
     }
 
-    void cleanup() const {
+    void cleanup() {
+        cleanup_swap_chain();
         glfwDestroyWindow(window_);
         glfwTerminate();
     }
@@ -676,7 +716,7 @@ int main() {
     try {
         app.run();
     } catch (const std::exception& e) {
-        std::cerr << e.what() << std::endl;
+        std::cerr << "Exception thrown: " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
 
