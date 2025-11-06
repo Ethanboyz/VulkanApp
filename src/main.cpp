@@ -602,11 +602,16 @@ private:
         while (device_.waitForFences(*in_flight_fences_[current_frame_], vk::True, UINT64_MAX) == vk::Result::eTimeout) {}
 
         // Acquire image from swap chain, write command
-        auto [result, swap_chain_image_index] = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphores_[current_frame_], nullptr);
-        if (result == vk::Result::eErrorOutOfDateKHR) {
+        vk::Result result;
+        unsigned swap_chain_image_index;
+        try {
+            std::tie(result, swap_chain_image_index) = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphores_[current_frame_], nullptr);
+        } catch (const vk::OutOfDateKHRError& e) {
             framebuffer_resized = false;
             recreate_swap_chain();
             return;
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Failed to acquire next swap chain image!");
         }
         if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
             throw std::runtime_error("Failed to acquire next swap chain image!");
@@ -637,8 +642,14 @@ private:
             .pSwapchains = &*swap_chain_,
             .pImageIndices = &swap_chain_image_index
         };
-        result = present_queue_.presentKHR(present_info_khr);
-        if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || framebuffer_resized) {
+        try {
+            result = present_queue_.presentKHR(present_info_khr);
+        } catch (const vk::OutOfDateKHRError& e) {
+            recreate_swap_chain();
+        } catch (const std::exception& e) {
+            throw std::runtime_error("Failed to present swap chain image!");
+        }
+        if (result == vk::Result::eSuboptimalKHR || framebuffer_resized) {
             recreate_swap_chain();
         } else if (result != vk::Result::eSuccess) {
             throw std::runtime_error("Failed to present swap chain image!");
