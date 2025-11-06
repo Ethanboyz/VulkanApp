@@ -645,11 +645,13 @@ private:
         try {
             result = present_queue_.presentKHR(present_info_khr);
         } catch (const vk::OutOfDateKHRError& e) {
+            framebuffer_resized = false;
             recreate_swap_chain();
         } catch (const std::exception& e) {
             throw std::runtime_error("Failed to present swap chain image!");
         }
         if (result == vk::Result::eSuboptimalKHR || framebuffer_resized) {
+            framebuffer_resized = false;
             recreate_swap_chain();
         } else if (result != vk::Result::eSuccess) {
             throw std::runtime_error("Failed to present swap chain image!");
@@ -678,7 +680,7 @@ private:
     }
 
     // Should be called when the window resizing occurs
-    static void framebuffer_resize_callback(GLFWwindow* window, int window_width, int window_height) {
+    static void framebuffer_resize_callback(GLFWwindow* window, [[maybe_unused]] int window_width, [[maybe_unused]] int window_height) {
         const auto app = static_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
         app->framebuffer_resized = true;
     }
