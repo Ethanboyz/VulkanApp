@@ -23,6 +23,7 @@ target_compile_options(Vulkan PRIVATE
     -Wconversion
     -Wshadow
     -Werror
+    -Wno-missing-field-initializers
 )
 
 target_link_libraries(Vulkan PRIVATE Vulkan::Vulkan glfw)

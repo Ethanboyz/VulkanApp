@@ -394,7 +394,7 @@ private:
         return {device_, shader_module_create_info};
     }
 
-    // Creates a new vertex buffer
+    // Creates a new vertex buffer and passes the vertices vector into it
     void create_vertex_buffer() {
         vk::BufferCreateInfo buffer_create_info = {
             .flags = {},
@@ -413,6 +413,10 @@ private:
         
         vertex_buffer_memory_ = vk::raii::DeviceMemory(device_, memory_alloc_info);
         vertex_buffer_.bindMemory(*vertex_buffer_memory_, 0);
+
+        void* mapped_vertex_buffer_mem = vertex_buffer_memory_.mapMemory(0, buffer_create_info.size);
+        memcpy(mapped_vertex_buffer_mem, vertices.data(), buffer_create_info.size);
+        vertex_buffer_memory_.unmapMemory();
     }
 
     // Query the current device for its memory properties (supported memory types and memory heaps)
@@ -592,6 +596,7 @@ private:
     // Record commands to the allocated command pool buffer through the graphics pipeline
     void record_command_buffer(const uint32_t swap_chain_image_index) const {
         command_buffers_[current_frame_].begin({});      // Start recording the allocated command buffer
+        command_buffers_[current_frame_].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline_);
 
         // Transition swap chain image to color attachment layout
         transition_image_layout(
@@ -627,14 +632,14 @@ private:
         command_buffers_[current_frame_].beginRendering(rendering_info);
         command_buffers_[current_frame_].bindPipeline(vk::PipelineBindPoint::eGraphics, graphics_pipeline_);
 
-        const auto viewport = vk::Viewport(
-            0.f,
-            0.f,
-            static_cast<float>(swap_chain_extent_.width),
-            static_cast<float>(swap_chain_extent_.height),
-            0.f,
-            1.f
-        );
+        const vk::Viewport viewport = {
+            .x = 0.f,
+            .y = 0.f,
+            .width = static_cast<float>(swap_chain_extent_.width),
+            .height = static_cast<float>(swap_chain_extent_.height),
+            .minDepth = 0.f,
+            .maxDepth = 1.f
+        };
         const auto scissors = vk::Rect2D{
             .offset = vk::Offset2D(0, 0),
             .extent = swap_chain_extent_
@@ -642,6 +647,7 @@ private:
         command_buffers_[current_frame_].setViewport(0, viewport);
         command_buffers_[current_frame_].setScissor(0, scissors);
 
+        command_buffers_[current_frame_].bindVertexBuffers(0, *vertex_buffer_, {0});
         command_buffers_[current_frame_].draw(3, 1, 0, 0);
 
         // Done rendering
@@ -670,9 +676,11 @@ private:
         constexpr vk::FenceCreateInfo fence_create_info = {
             .flags = vk::FenceCreateFlagBits::eSignaled
         };
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        for (size_t i = 0; i < swap_chain_images_.size(); i++) {
             present_complete_semaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
             render_complete_semaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+        }
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             in_flight_fences_.emplace_back(device_, fence_create_info);
         }
     }
@@ -711,14 +719,14 @@ private:
             .commandBufferCount = 1,
             .pCommandBuffers = &*command_buffers_[current_frame_],
             .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &*render_complete_semaphores_[current_frame_]
+            .pSignalSemaphores = &*render_complete_semaphores_[swap_chain_image_index]
         };
         graphics_queue_.submit(submit_info, *in_flight_fences_[current_frame_]);
 
         // Tell the GPU to present the result, but only after the rendering is complete
         const vk::PresentInfoKHR present_info_khr = {
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &*render_complete_semaphores_[current_frame_],
+            .pWaitSemaphores = &*render_complete_semaphores_[swap_chain_image_index],
             .swapchainCount = 1,
             .pSwapchains = &*swap_chain_,
             .pImageIndices = &swap_chain_image_index
