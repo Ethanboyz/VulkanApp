@@ -1,6 +1,17 @@
+#include <cstdint>
 #define GLFW_INCLUDE_VULKAN
+
+#include <cstring>
+#include <filesystem>
+
+#include "vulkan/vulkan.hpp"
+#include <array>
+#include <cstddef>
+#include <glm/fwd.hpp>
+#include <vector>
 #include <vulkan/vulkan_raii.hpp>
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 
 #include <iostream>
 #include <stdexcept>
@@ -11,6 +22,31 @@
 static constexpr int WINDOW_WIDTH{800};
 static constexpr int WINDOW_HEIGHT{600};
 static constexpr int MAX_FRAMES_IN_FLIGHT{2};
+
+struct Vertex {
+    glm::vec2 position;
+    glm::vec3 color;
+
+    static vk::VertexInputBindingDescription get_binding_description() {
+        return {
+            .binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = vk::VertexInputRate::eVertex
+        };
+    }
+    static std::array<vk::VertexInputAttributeDescription, 2> get_attribute_descriptions() {
+        return {
+            vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, position)),
+            vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color))
+        };
+    }
+};
+
+const std::vector<Vertex> vertices {
+    {{0.0, -0.5}, {1.0, 0.0, 0.0}},
+    {{0.5, 0.5}, {0.0, 1.0, 0.0}},
+    {{-0.5, 0.5}, {0.0, 0.0, 1.0}}
+};
 
 class HelloTriangleApplication {
 public:
@@ -42,7 +78,10 @@ private:
     vk::Extent2D swap_chain_extent_;
     std::vector<vk::raii::ImageView> swap_chain_image_views_;
 
+    // Graphics pipeline
     vk::raii::PipelineLayout pipeline_layout_ = nullptr;
+    vk::raii::Buffer vertex_buffer_ = nullptr;
+    vk::raii::DeviceMemory vertex_buffer_memory_ = nullptr;
     vk::raii::Pipeline graphics_pipeline_ = nullptr;
 
     vk::raii::CommandPool command_pool_ = nullptr;
@@ -173,11 +212,11 @@ private:
         if (image_size_already_specified) {
             swap_chain_extent = surface_capabilities.currentExtent;
         } else {
-            int width, height;
+            int width{}, height{};
             glfwGetFramebufferSize(window_, &width, &height);       // Window size in pixel coordinates
             swap_chain_extent = vk::Extent2D{
-                std::clamp<uint32_t>(width, surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width),
-                std::clamp<uint32_t>(height, surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height)
+                .width = std::clamp<uint32_t>(static_cast<unsigned>(width), surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width),
+                .height = std::clamp<uint32_t>(static_cast<unsigned>(height), surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height)
             };
         }
 
@@ -216,9 +255,9 @@ private:
     void create_logical_device() {
         // Search for a graphics and a present capable queue, prefer one queue that supports both capabilities
         const auto queue_families = physical_device_.getQueueFamilyProperties();
-        uint32_t graphics_queue_index = queue_families.size();
-        uint32_t present_queue_index = queue_families.size();
-        for (int index = 0; index < queue_families.size(); index++) {
+        uint32_t graphics_queue_index = static_cast<uint32_t>(queue_families.size());
+        uint32_t present_queue_index = static_cast<uint32_t>(queue_families.size());
+        for (uint32_t index = 0; index < queue_families.size(); index++) {
             const bool supports_graphics = static_cast<bool>(queue_families[index].queueFlags & vk::QueueFlagBits::eGraphics);
             const bool supports_present = physical_device_.getSurfaceSupportKHR(index, surface_);
             if (supports_graphics && supports_present) {
@@ -304,7 +343,7 @@ private:
 
     // Create new window surface
     void create_surface() {
-        VkSurfaceKHR surface;
+        VkSurfaceKHR surface{};
         if (const VkResult result = glfwCreateWindowSurface(*instance_, window_, nullptr, &surface); result != VK_SUCCESS) {
             throw std::runtime_error("Failed to create window surface: ERROR CODE " + std::to_string(result));
         }
@@ -318,11 +357,11 @@ private:
             .viewType = vk::ImageViewType::e2D,
             .format = swap_chain_format_,
             .subresourceRange = {
-                vk::ImageAspectFlagBits::eColor,
-                0,
-                1,
-                0,
-                1
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
             }
         };
 
@@ -336,10 +375,10 @@ private:
     static std::vector<char> read_file(const std::string& filename) {
         std::ifstream file{filename, std::ios::ate | std::ios::binary};    // Open in binary mode, seek to end of file
         if (!file) {
-            throw std::runtime_error("Failed to open file " + filename);
+            throw std::runtime_error("Failed to open file " + filename + ": " + strerror(errno) + " (current directory: " + std::string(std::filesystem::current_path()) + ")");
         }
         const auto filesize = file.tellg();
-        std::vector<char> buffer(filesize);
+        std::vector<char> buffer(static_cast<size_t>(filesize));
 
         file.seekg(0, std::ios::beg);
         file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
@@ -355,13 +394,55 @@ private:
         return {device_, shader_module_create_info};
     }
 
+    // Creates a new vertex buffer
+    void create_vertex_buffer() {
+        vk::BufferCreateInfo buffer_create_info = {
+            .flags = {},
+            .size = sizeof(vertices[0]) * vertices.size(),
+            .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+            .sharingMode = vk::SharingMode::eExclusive
+        };
+        vertex_buffer_ = vk::raii::Buffer(device_, buffer_create_info);
+        
+        auto memory_requirements = vertex_buffer_.getMemoryRequirements();
+        uint32_t device_memory_type = find_memory_type(memory_requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        vk::MemoryAllocateInfo memory_alloc_info = {
+            .allocationSize = memory_requirements.size,
+            .memoryTypeIndex = device_memory_type
+        };
+        
+        vertex_buffer_memory_ = vk::raii::DeviceMemory(device_, memory_alloc_info);
+        vertex_buffer_.bindMemory(*vertex_buffer_memory_, 0);
+    }
+
+    // Query the current device for its memory properties (supported memory types and memory heaps)
+    uint32_t find_memory_type(uint32_t type_filter, vk::MemoryPropertyFlags properties) {
+        auto memory_properties = physical_device_.getMemoryProperties();
+        for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++) {
+            const bool memory_type_is_usable = type_filter & (1 << i);
+            const bool memory_type_has_all_properties = (memory_properties.memoryTypes[i].propertyFlags & properties) == properties;
+            if (memory_type_is_usable && memory_type_has_all_properties) {
+                return i;
+            }
+        }
+        throw std::runtime_error("Failed to find a suitable memory type!");
+    }
+
     // Initialize the graphics rasterization pipeline
     void create_graphics_pipeline() {
         vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
             .topology = vk::PrimitiveTopology::eTriangleList
         };
 
-        vk::PipelineVertexInputStateCreateInfo vertex_input_create_info;
+        // Pass in vertex input binding and attribute descriptions
+        auto binding_description = Vertex::get_binding_description();
+        auto attribute_descriptions = Vertex::get_attribute_descriptions();
+        vk::PipelineVertexInputStateCreateInfo vertex_input_create_info = {
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size()),
+            .pVertexAttributeDescriptions = attribute_descriptions.data()
+        };
 
         // Load shader programs
         const auto shaders = read_file("shaders/slang.spv");
@@ -606,11 +687,11 @@ private:
         unsigned swap_chain_image_index;
         try {
             std::tie(result, swap_chain_image_index) = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphores_[current_frame_], nullptr);
-        } catch (const vk::OutOfDateKHRError& e) {
+        } catch (const vk::OutOfDateKHRError&) {
             framebuffer_resized = false;
             recreate_swap_chain();
             return;
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             throw std::runtime_error("Failed to acquire next swap chain image!");
         }
         if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
@@ -644,10 +725,10 @@ private:
         };
         try {
             result = present_queue_.presentKHR(present_info_khr);
-        } catch (const vk::OutOfDateKHRError& e) {
+        } catch (const vk::OutOfDateKHRError&) {
             framebuffer_resized = false;
             recreate_swap_chain();
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             throw std::runtime_error("Failed to present swap chain image!");
         }
         if (result == vk::Result::eSuboptimalKHR || framebuffer_resized) {
@@ -704,6 +785,7 @@ private:
         create_image_views();
         create_graphics_pipeline();
         create_command_pool();
+        create_vertex_buffer();
         create_command_buffers();
         create_sync_objects();
     }

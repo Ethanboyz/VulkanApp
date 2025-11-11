@@ -23,3 +23,6 @@ callgrind.*
 
 # Ignore misc files
 *.sh
+/.cache/
+.*
+!.gitignore

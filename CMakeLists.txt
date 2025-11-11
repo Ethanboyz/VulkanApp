@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 4.0)
 project(Vulkan)
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_CLANG_TIDY "clang-tidy")
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+message(STATUS "VULKAN_SDK = '$ENV{VULKAN_SDK}'")
 
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
@@ -12,6 +16,14 @@ find_package(Slang CONFIG HINTS "$ENV{VULKAN_SDK}/lib/cmake")
 
 add_executable(Vulkan src/main.cpp)
 target_compile_definitions(Vulkan PRIVATE VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
+target_compile_options(Vulkan PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wconversion
+    -Wshadow
+    -Werror
+)
 
 target_link_libraries(Vulkan PRIVATE Vulkan::Vulkan glfw)
 
