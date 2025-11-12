@@ -104,19 +104,22 @@ private:
             .apiVersion = vk::ApiVersion13
         };
 
-        // Get required glfw extensions, check if they are all supported by the instance
+        // Get required glfw extensions and context-supported extensions
         uint32_t num_glfw_extensions{};
-        auto glfw_required_extensions{glfwGetRequiredInstanceExtensions(&num_glfw_extensions)};
+        auto glfw_required_extensions = glfwGetRequiredInstanceExtensions(&num_glfw_extensions);
+        auto required_extensions = std::span(glfw_required_extensions, num_glfw_extensions);
         auto extension_properties{context_.enumerateInstanceExtensionProperties()};
-        for (uint32_t i = 0; i < num_glfw_extensions; i++) {
-            const bool supported = std::ranges::any_of(
+
+        // Check if they are all supported by the instance
+        for (const auto& glfw_required_extension : required_extensions) {
+            const bool required_extension_supported = std::ranges::any_of(
                 extension_properties,
-                [glfw_extension = glfw_required_extensions[i]](const auto& extension_property) {
-                    return strcmp(extension_property.extensionName, glfw_extension) == 0;
+                [glfw_required_extension](const auto& extension_property) {
+                    return strcmp(extension_property.extensionName, glfw_required_extension) == 0;
                 }
             );
-            if (!supported) {
-                throw std::runtime_error("Required GLFW extension not supported: " + std::string(glfw_required_extensions[i]));
+            if (!required_extension_supported) {
+                throw std::runtime_error("Required GLFW extension not supported: " + std::string(glfw_required_extension));
             }
         }
 
@@ -255,8 +258,8 @@ private:
     void create_logical_device() {
         // Search for a graphics and a present capable queue, prefer one queue that supports both capabilities
         const auto queue_families = physical_device_.getQueueFamilyProperties();
-        uint32_t graphics_queue_index = static_cast<uint32_t>(queue_families.size());
-        uint32_t present_queue_index = static_cast<uint32_t>(queue_families.size());
+        auto graphics_queue_index = static_cast<uint32_t>(queue_families.size());
+        auto present_queue_index = static_cast<uint32_t>(queue_families.size());
         for (uint32_t index = 0; index < queue_families.size(); index++) {
             const bool supports_graphics = static_cast<bool>(queue_families[index].queueFlags & vk::QueueFlagBits::eGraphics);
             const bool supports_present = physical_device_.getSurfaceSupportKHR(index, surface_);
@@ -691,8 +694,8 @@ private:
         while (device_.waitForFences(*in_flight_fences_[current_frame_], vk::True, UINT64_MAX) == vk::Result::eTimeout) {}
 
         // Acquire image from swap chain, write command
-        vk::Result result;
-        unsigned swap_chain_image_index;
+        vk::Result result{};
+        unsigned swap_chain_image_index{};
         try {
             std::tie(result, swap_chain_image_index) = swap_chain_.acquireNextImage(UINT64_MAX, *present_complete_semaphores_[current_frame_], nullptr);
         } catch (const vk::OutOfDateKHRError&) {
