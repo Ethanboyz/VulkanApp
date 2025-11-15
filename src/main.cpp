@@ -43,7 +43,7 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices {
-    {{0.0, -0.5}, {1.0, 0.0, 0.0}},
+    {{0.0, -0.5}, {1.0, 1.0, 1.0}},
     {{0.5, 0.5}, {0.0, 1.0, 0.0}},
     {{-0.5, 0.5}, {0.0, 0.0, 1.0}}
 };
@@ -280,8 +280,8 @@ private:
         graphics_queue_index_ = graphics_queue_index;
         present_queue_index_ = present_queue_index;
 
-        float queue_priority = 1.f;
-        vk::DeviceQueueCreateInfo device_queue_create_info {
+        const float queue_priority = 1.f;
+        const vk::DeviceQueueCreateInfo device_queue_create_info {
             .queueFamilyIndex = graphics_queue_index,
             .queueCount = 1,
             .pQueuePriorities = &queue_priority
@@ -320,7 +320,7 @@ private:
         };
         const auto device_extension_properties = physical_device_.enumerateDeviceExtensionProperties();
         for (const auto& device_extension : device_extensions) {
-            bool supported = std::ranges::any_of(
+            const bool supported = std::ranges::any_of(
                 device_extension_properties,
                 [device_extension](auto extension) {
                     return std::strcmp(extension.extensionName, device_extension) == 0;
@@ -397,25 +397,29 @@ private:
         return {device_, shader_module_create_info};
     }
 
+    // Creates a new buffer and assigns it to buffer argument
+    void create_buffer(vk::BufferCreateInfo buffer_create_info, vk::MemoryPropertyFlags memory_properties, vk::raii::Buffer buffer) {
+        buffer = vk::raii::Buffer(device_, buffer_create_info);
+        const auto memory_requirements = buffer.getMemoryRequirements();
+        const uint32_t device_memory_type = find_memory_type(memory_requirements.memoryTypeBits, memory_properties);
+        const vk::MemoryAllocateInfo memory_alloc_info = {
+            .allocationSize = memory_requirements.size,
+            .memoryTypeIndex = device_memory_type
+        };
+        auto buffer_memory_ = vk::raii::DeviceMemory(device_, memory_alloc_info);
+        buffer.bindMemory(*vertex_buffer_memory_, 0);
+    }
+
     // Creates a new vertex buffer and passes the vertices vector into it
     void create_vertex_buffer() {
-        vk::BufferCreateInfo buffer_create_info = {
+        const vk::BufferCreateInfo buffer_create_info = {
             .flags = {},
             .size = sizeof(vertices[0]) * vertices.size(),
             .usage = vk::BufferUsageFlagBits::eVertexBuffer,
             .sharingMode = vk::SharingMode::eExclusive
         };
-        vertex_buffer_ = vk::raii::Buffer(device_, buffer_create_info);
-        
-        auto memory_requirements = vertex_buffer_.getMemoryRequirements();
-        uint32_t device_memory_type = find_memory_type(memory_requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-        vk::MemoryAllocateInfo memory_alloc_info = {
-            .allocationSize = memory_requirements.size,
-            .memoryTypeIndex = device_memory_type
-        };
-        
-        vertex_buffer_memory_ = vk::raii::DeviceMemory(device_, memory_alloc_info);
-        vertex_buffer_.bindMemory(*vertex_buffer_memory_, 0);
+
+        create_buffer(buffer_create_info, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, vertex_buffer_);
 
         void* mapped_vertex_buffer_mem = vertex_buffer_memory_.mapMemory(0, buffer_create_info.size);
         memcpy(mapped_vertex_buffer_mem, vertices.data(), buffer_create_info.size);
@@ -437,14 +441,14 @@ private:
 
     // Initialize the graphics rasterization pipeline
     void create_graphics_pipeline() {
-        vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
+        const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
             .topology = vk::PrimitiveTopology::eTriangleList
         };
 
         // Pass in vertex input binding and attribute descriptions
-        auto binding_description = Vertex::get_binding_description();
-        auto attribute_descriptions = Vertex::get_attribute_descriptions();
-        vk::PipelineVertexInputStateCreateInfo vertex_input_create_info = {
+        const auto binding_description = Vertex::get_binding_description();
+        const auto attribute_descriptions = Vertex::get_attribute_descriptions();
+        const vk::PipelineVertexInputStateCreateInfo vertex_input_create_info = {
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &binding_description,
             .vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size()),
@@ -500,8 +504,8 @@ private:
         color_blend_attachment.colorWriteMask =
             vk::ColorComponentFlagBits::eR
             | vk::ColorComponentFlagBits::eG
-         | vk::ColorComponentFlagBits::eB
-         | vk::ColorComponentFlagBits::eA;
+            | vk::ColorComponentFlagBits::eB
+            | vk::ColorComponentFlagBits::eA;
         color_blend_attachment.blendEnable = vk::False;
         const vk::PipelineColorBlendStateCreateInfo color_blend_create_info {
             .logicOpEnable = vk::False,
@@ -517,11 +521,11 @@ private:
         };
         pipeline_layout_ = vk::raii::PipelineLayout{device_, pipeline_layout_create_info};
 
-        vk::PipelineRenderingCreateInfo pipeline_rendering_create_info {    // Allows dynamic rendering
+        const vk::PipelineRenderingCreateInfo pipeline_rendering_create_info {    // Allows dynamic rendering
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &swap_chain_format_
         };
-        vk::GraphicsPipelineCreateInfo graphics_pipeline_create_info {
+        const vk::GraphicsPipelineCreateInfo graphics_pipeline_create_info {
             .pNext = &pipeline_rendering_create_info,
             .stageCount = 2,
             .pStages = shader_stages,
@@ -542,7 +546,7 @@ private:
 
     // Create the command pool for the graphics queue family
     void create_command_pool() {
-        vk::CommandPoolCreateInfo command_pool_create_info {
+        const vk::CommandPoolCreateInfo command_pool_create_info {
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             .queueFamilyIndex = graphics_queue_index_
         };
@@ -759,7 +763,7 @@ private:
 
     // Redo the swap chain creation steps plus its image views
     void recreate_swap_chain() {
-        int width = 0, height = 0;
+        int width{}, height{};
         glfwGetFramebufferSize(window_, &width, &height);
         while (width == 0 || height == 0) {     // Window is minimized
             glfwGetFramebufferSize(window_, &width, &height);
@@ -817,12 +821,11 @@ private:
 };
 
 int main() {
-    HelloTriangleApplication app;
-
     try {
+        HelloTriangleApplication app;
         app.run();
     } catch (const std::exception& e) {
-        std::cerr << "Exception thrown: " << e.what() << std::endl;
+        std::cerr << "Exception thrown: " << e.what() << "\n";
         return EXIT_FAILURE;
     }
 
