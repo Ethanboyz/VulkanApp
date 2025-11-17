@@ -169,12 +169,14 @@ private:
         for (const auto& device : devices) {
             if (device.getProperties().deviceType == vk::PhysicalDeviceType::eDiscreteGpu && device.getProperties().apiVersion >= VK_API_VERSION_1_3) {
                 physical_device_ = vk::raii::PhysicalDevice(device);
+                std::cout << "Selected GPU: " << physical_device_.getProperties().deviceName << "\n";
                 return;
             }
         }
         for (const auto& device : devices) {
             if (device.getProperties().apiVersion >= VK_API_VERSION_1_3) {
                 physical_device_ = vk::raii::PhysicalDevice(device);
+                std::cout << "Selected GPU: " << physical_device_.getProperties().deviceName << "\n";
                 return;
             }
         }
@@ -398,7 +400,7 @@ private:
     }
 
     // Creates a new buffer and assigns it to buffer argument
-    void create_buffer(vk::BufferCreateInfo buffer_create_info, vk::MemoryPropertyFlags memory_properties, vk::raii::Buffer& buffer) {
+    void create_buffer(const vk::BufferCreateInfo& buffer_create_info, const vk::MemoryPropertyFlags& memory_properties, vk::raii::Buffer& buffer, vk::raii::DeviceMemory& buffer_memory) {
         buffer = vk::raii::Buffer(device_, buffer_create_info);
         const auto memory_requirements = buffer.getMemoryRequirements();
         const uint32_t device_memory_type = find_memory_type(memory_requirements.memoryTypeBits, memory_properties);
@@ -406,8 +408,8 @@ private:
             .allocationSize = memory_requirements.size,
             .memoryTypeIndex = device_memory_type
         };
-        auto buffer_memory_ = vk::raii::DeviceMemory(device_, memory_alloc_info);
-        buffer.bindMemory(*vertex_buffer_memory_, 0);
+        buffer_memory = vk::raii::DeviceMemory(device_, memory_alloc_info);
+        buffer.bindMemory(*buffer_memory, 0);
     }
 
     // Creates a new vertex buffer and passes the vertices vector into it
@@ -419,7 +421,7 @@ private:
             .sharingMode = vk::SharingMode::eExclusive
         };
 
-        create_buffer(buffer_create_info, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, vertex_buffer_);
+        create_buffer(buffer_create_info, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, vertex_buffer_, vertex_buffer_memory_);
 
         void* mapped_vertex_buffer_mem = vertex_buffer_memory_.mapMemory(0, buffer_create_info.size);
         memcpy(mapped_vertex_buffer_mem, vertices.data(), buffer_create_info.size);
@@ -427,7 +429,7 @@ private:
     }
 
     // Query the current device for its memory properties (supported memory types and memory heaps)
-    uint32_t find_memory_type(uint32_t type_filter, vk::MemoryPropertyFlags properties) {
+    uint32_t find_memory_type(uint32_t type_filter, const vk::MemoryPropertyFlags& properties) {
         auto memory_properties = physical_device_.getMemoryProperties();
         for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++) {
             const bool memory_type_is_usable = type_filter & (1 << i);
