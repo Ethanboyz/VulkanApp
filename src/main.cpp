@@ -398,7 +398,7 @@ private:
     }
 
     // Creates a new buffer and assigns it to buffer argument
-    void create_buffer(vk::BufferCreateInfo buffer_create_info, vk::MemoryPropertyFlags memory_properties, vk::raii::Buffer buffer) {
+    void create_buffer(vk::BufferCreateInfo buffer_create_info, vk::MemoryPropertyFlags memory_properties, vk::raii::Buffer& buffer) {
         buffer = vk::raii::Buffer(device_, buffer_create_info);
         const auto memory_requirements = buffer.getMemoryRequirements();
         const uint32_t device_memory_type = find_memory_type(memory_requirements.memoryTypeBits, memory_properties);

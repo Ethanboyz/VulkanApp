@@ -9,7 +9,7 @@ message(STATUS "VULKAN_SDK = '$ENV{VULKAN_SDK}'")
 find_package(Vulkan REQUIRED)
 find_package(glfw3 REQUIRED)
 
-include_directories("$ENV{VULKAN_SDK}/include")
+include_directories(SYSTEM "$ENV{VULKAN_SDK}/include")
 link_directories("$ENV{VULKAN_SDK}/lib")
 
 find_package(Slang CONFIG HINTS "$ENV{VULKAN_SDK}/lib/cmake")
