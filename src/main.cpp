@@ -750,7 +750,8 @@ private:
         command_buffers_[current_frame_].setScissor(0, scissors);
 
         command_buffers_[current_frame_].bindVertexBuffers(0, *vertex_buffer_, {0});
-        command_buffers_[current_frame_].draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+        command_buffers_[current_frame_].bindIndexBuffer(*index_buffer_, 0, vk::IndexType::eUint16);
+        command_buffers_[current_frame_].drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
         // Done rendering
         command_buffers_[current_frame_].endRendering();
@@ -896,6 +897,7 @@ private:
         create_graphics_pipeline();
         create_command_pool();
         create_vertex_buffer();
+        create_index_buffer();
         create_command_buffers();
         create_sync_objects();
     }
