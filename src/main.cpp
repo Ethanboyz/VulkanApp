@@ -380,7 +380,10 @@ private:
     static std::vector<char> read_file(const std::string& filename) {
         std::ifstream file{filename, std::ios::ate | std::ios::binary};    // Open in binary mode, seek to end of file
         if (!file) {
-            throw std::runtime_error("Failed to open file " + filename + ": " + strerror(errno) + " (current directory: " + std::string(std::filesystem::current_path()) + ")");
+            file.open("build/" + filename, std::ios::ate | std::ios::binary);
+            if (!file) {
+                throw std::runtime_error("Failed to open file " + filename + ": " + strerror(errno) + " (current directory: " + std::string(std::filesystem::current_path()) + ")");
+            }
         }
         const auto filesize = file.tellg();
         std::vector<char> buffer(static_cast<size_t>(filesize));
@@ -399,33 +402,80 @@ private:
         return {device_, shader_module_create_info};
     }
 
-    // Creates a new buffer and assigns it to buffer argument
+    // Creates a new buffer and assigns it to buffer argument, also binds device memory to the buffer and assigns it to buffer_memory
     void create_buffer(const vk::BufferCreateInfo& buffer_create_info, const vk::MemoryPropertyFlags& memory_properties, vk::raii::Buffer& buffer, vk::raii::DeviceMemory& buffer_memory) {
         buffer = vk::raii::Buffer(device_, buffer_create_info);
-        const auto memory_requirements = buffer.getMemoryRequirements();
+
+        const vk::MemoryRequirements memory_requirements = buffer.getMemoryRequirements();
         const uint32_t device_memory_type = find_memory_type(memory_requirements.memoryTypeBits, memory_properties);
         const vk::MemoryAllocateInfo memory_alloc_info = {
             .allocationSize = memory_requirements.size,
             .memoryTypeIndex = device_memory_type
         };
+
         buffer_memory = vk::raii::DeviceMemory(device_, memory_alloc_info);
         buffer.bindMemory(*buffer_memory, 0);
     }
 
-    // Creates a new vertex buffer and passes the vertices vector into it
+    // Copies the contents of one buffer to another
+    void copy_buffer(const vk::raii::Buffer& src_buffer, vk::raii::Buffer& dst_buffer, vk::DeviceSize src_buffer_size) {
+        // Allocate temporary command buffer to handle buffer transfer commands
+        vk::CommandBufferAllocateInfo command_buffer_allocate_info = {
+            .commandPool = command_pool_,
+            .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = 1
+        };
+        vk::raii::CommandBuffer command_buffer = std::move(device_.allocateCommandBuffers(command_buffer_allocate_info).front());
+
+        // Begin transfer recording
+        vk::CommandBufferBeginInfo command_buffer_begin_info = {
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+        };
+        command_buffer.begin(command_buffer_begin_info);
+        command_buffer.copyBuffer(src_buffer, dst_buffer, vk::BufferCopy(0, 0, src_buffer_size));
+
+        // End record and submit the recorded commands
+        command_buffer.end();
+
+        vk::SubmitInfo submit_info = {
+            .commandBufferCount = 1,
+            .pCommandBuffers = &*command_buffer
+        };
+        graphics_queue_.submit(submit_info, nullptr);
+        graphics_queue_.waitIdle();
+    }
+
+    // Creates a new staging buffer with the vertices info and passes it to the vertex buffer
     void create_vertex_buffer() {
-        const vk::BufferCreateInfo buffer_create_info = {
+        const vk::DeviceSize buffer_size = sizeof(vertices[0]) * vertices.size();
+
+        // Create staging buffer
+        const vk::BufferCreateInfo staging_buffer_create_info = {
             .flags = {},
-            .size = sizeof(vertices[0]) * vertices.size(),
-            .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+            .size = buffer_size,
+            .usage = vk::BufferUsageFlagBits::eTransferSrc,
             .sharingMode = vk::SharingMode::eExclusive
         };
+        vk::raii::Buffer staging_buffer = nullptr;
+        const auto staging_memory_properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+        vk::raii::DeviceMemory staging_buffer_memory = nullptr;
+        create_buffer(staging_buffer_create_info, staging_memory_properties, staging_buffer, staging_buffer_memory);
 
-        create_buffer(buffer_create_info, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, vertex_buffer_, vertex_buffer_memory_);
-
-        void* mapped_vertex_buffer_mem = vertex_buffer_memory_.mapMemory(0, buffer_create_info.size);
-        memcpy(mapped_vertex_buffer_mem, vertices.data(), buffer_create_info.size);
+        // Copy vertices data to staging buffer
+        void* mapped_staging_buffer_mem = staging_buffer_memory.mapMemory(0, staging_buffer_create_info.size);
+        memcpy(mapped_staging_buffer_mem, vertices.data(), staging_buffer_create_info.size);
         vertex_buffer_memory_.unmapMemory();
+
+        // Create vertex buffer and transfer staging buffer contents to it
+        const vk::BufferCreateInfo vertex_buffer_create_info = {
+            .flags = {},
+            .size = buffer_size,
+            .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+            .sharingMode = vk::SharingMode::eExclusive
+        };
+        const auto vertex_memory_properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        create_buffer(vertex_buffer_create_info, vertex_memory_properties, vertex_buffer_, vertex_buffer_memory_);
+        copy_buffer(staging_buffer, vertex_buffer_, staging_buffer_create_info.size);
     }
 
     // Query the current device for its memory properties (supported memory types and memory heaps)
@@ -604,7 +654,8 @@ private:
 
     // Record commands to the allocated command pool buffer through the graphics pipeline
     void record_command_buffer(const uint32_t swap_chain_image_index) const {
-        command_buffers_[current_frame_].begin({});      // Start recording the allocated command buffer
+        vk::CommandBufferBeginInfo command_buffer_begin_info = {};
+        command_buffers_[current_frame_].begin(command_buffer_begin_info);      // Start recording the allocated command buffer
         command_buffers_[current_frame_].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline_);
 
         // Transition swap chain image to color attachment layout
