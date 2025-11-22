@@ -43,9 +43,12 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices {
-    {{0.0, -0.5}, {1.0, 1.0, 1.0}},
-    {{0.5, 0.5}, {0.0, 1.0, 0.0}},
-    {{-0.5, 0.5}, {0.0, 0.0, 1.0}}
+    {{-0.5, -0.5}, {1.0, 1.0, 1.0}},    // Upper left
+    {{0.5, -0.5}, {1.0, 1.0, 1.0}},
+    {{0.5, 0.5}, {0.0, 1.0, 0.0}},      // Lower right
+    {{-0.5, -0.5}, {1.0, 1.0, 1.0}},    // Upper left
+    {{0.5, 0.5}, {0.0, 1.0, 0.0}},      // Lower right
+    {{-0.5, 0.5}, {0.0, 0.0, 1.0}},
 };
 
 class HelloTriangleApplication {
@@ -708,7 +711,7 @@ private:
         command_buffers_[current_frame_].setScissor(0, scissors);
 
         command_buffers_[current_frame_].bindVertexBuffers(0, *vertex_buffer_, {0});
-        command_buffers_[current_frame_].draw(3, 1, 0, 0);
+        command_buffers_[current_frame_].draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
         // Done rendering
         command_buffers_[current_frame_].endRendering();
