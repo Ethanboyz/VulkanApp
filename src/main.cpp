@@ -44,11 +44,13 @@ struct Vertex {
 
 const std::vector<Vertex> vertices {
     {{-0.5, -0.5}, {1.0, 1.0, 1.0}},    // Upper left
-    {{0.5, -0.5}, {1.0, 1.0, 1.0}},
+    {{0.5, -0.5}, {1.0, 1.0, 1.0}},     // Upper right
     {{0.5, 0.5}, {0.0, 1.0, 0.0}},      // Lower right
-    {{-0.5, -0.5}, {1.0, 1.0, 1.0}},    // Upper left
-    {{0.5, 0.5}, {0.0, 1.0, 0.0}},      // Lower right
-    {{-0.5, 0.5}, {0.0, 0.0, 1.0}},
+    {{-0.5, 0.5}, {0.0, 0.0, 1.0}},     // Lower left
+};
+
+const std::vector<uint16_t> indices {
+    0, 1, 2, 0, 2, 3
 };
 
 class HelloTriangleApplication {
@@ -83,9 +85,13 @@ private:
 
     // Graphics pipeline
     vk::raii::PipelineLayout pipeline_layout_ = nullptr;
+    vk::raii::Pipeline graphics_pipeline_ = nullptr;
+
     vk::raii::Buffer vertex_buffer_ = nullptr;
     vk::raii::DeviceMemory vertex_buffer_memory_ = nullptr;
-    vk::raii::Pipeline graphics_pipeline_ = nullptr;
+
+    vk::raii::Buffer index_buffer_ = nullptr;
+    vk::raii::DeviceMemory index_buffer_memory_ = nullptr;
 
     vk::raii::CommandPool command_pool_ = nullptr;
     std::vector<vk::raii::CommandBuffer> command_buffers_;          // One command buffer per in-flight frame
@@ -479,6 +485,39 @@ private:
         const auto vertex_memory_properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
         create_buffer(vertex_buffer_create_info, vertex_memory_properties, vertex_buffer_, vertex_buffer_memory_);
         copy_buffer(staging_buffer, vertex_buffer_, staging_buffer_create_info.size);
+    }
+
+    // Creates a new staging buffer with the vertices index info and passes it to the index buffer
+    void create_index_buffer() {
+        const vk::DeviceSize buffer_size = sizeof(indices[0]) * indices.size();
+
+        // Create staging buffer
+        const vk::BufferCreateInfo staging_buffer_create_info = {
+            .flags = {},
+            .size = buffer_size,
+            .usage = vk::BufferUsageFlagBits::eTransferSrc,
+            .sharingMode = vk::SharingMode::eExclusive
+        };
+        vk::raii::Buffer staging_buffer = nullptr;
+        const auto staging_memory_properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+        vk::raii::DeviceMemory staging_buffer_memory = nullptr;
+        create_buffer(staging_buffer_create_info, staging_memory_properties, staging_buffer, staging_buffer_memory);
+
+        // Copy vertices data to staging buffer
+        void* mapped_staging_buffer_mem = staging_buffer_memory.mapMemory(0, staging_buffer_create_info.size);
+        memcpy(mapped_staging_buffer_mem, indices.data(), staging_buffer_create_info.size);
+        staging_buffer_memory.unmapMemory();
+
+        // Create index buffer and transfer staging buffer contents to it
+        const vk::BufferCreateInfo index_buffer_create_info = {
+            .flags = {},
+            .size = buffer_size,
+            .usage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+            .sharingMode = vk::SharingMode::eExclusive
+        };
+        const auto index_memory_properties = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        create_buffer(index_buffer_create_info, index_memory_properties, index_buffer_, index_buffer_memory_);
+        copy_buffer(staging_buffer, index_buffer_, staging_buffer_create_info.size);
     }
 
     // Query the current device for its memory properties (supported memory types and memory heaps)
