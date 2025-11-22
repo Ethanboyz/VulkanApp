@@ -420,15 +420,15 @@ private:
     // Copies the contents of one buffer to another
     void copy_buffer(const vk::raii::Buffer& src_buffer, vk::raii::Buffer& dst_buffer, vk::DeviceSize src_buffer_size) {
         // Allocate temporary command buffer to handle buffer transfer commands
-        vk::CommandBufferAllocateInfo command_buffer_allocate_info = {
+        const vk::CommandBufferAllocateInfo command_buffer_allocate_info = {
             .commandPool = command_pool_,
             .level = vk::CommandBufferLevel::ePrimary,
             .commandBufferCount = 1
         };
-        vk::raii::CommandBuffer command_buffer = std::move(device_.allocateCommandBuffers(command_buffer_allocate_info).front());
+        const vk::raii::CommandBuffer command_buffer = std::move(device_.allocateCommandBuffers(command_buffer_allocate_info).front());
 
         // Begin transfer recording
-        vk::CommandBufferBeginInfo command_buffer_begin_info = {
+        const vk::CommandBufferBeginInfo command_buffer_begin_info = {
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
         };
         command_buffer.begin(command_buffer_begin_info);
@@ -437,7 +437,7 @@ private:
         // End record and submit the recorded commands
         command_buffer.end();
 
-        vk::SubmitInfo submit_info = {
+        const vk::SubmitInfo submit_info = {
             .commandBufferCount = 1,
             .pCommandBuffers = &*command_buffer
         };
@@ -464,7 +464,7 @@ private:
         // Copy vertices data to staging buffer
         void* mapped_staging_buffer_mem = staging_buffer_memory.mapMemory(0, staging_buffer_create_info.size);
         memcpy(mapped_staging_buffer_mem, vertices.data(), staging_buffer_create_info.size);
-        vertex_buffer_memory_.unmapMemory();
+        staging_buffer_memory.unmapMemory();
 
         // Create vertex buffer and transfer staging buffer contents to it
         const vk::BufferCreateInfo vertex_buffer_create_info = {
@@ -654,7 +654,7 @@ private:
 
     // Record commands to the allocated command pool buffer through the graphics pipeline
     void record_command_buffer(const uint32_t swap_chain_image_index) const {
-        vk::CommandBufferBeginInfo command_buffer_begin_info = {};
+        const vk::CommandBufferBeginInfo command_buffer_begin_info = {};
         command_buffers_[current_frame_].begin(command_buffer_begin_info);      // Start recording the allocated command buffer
         command_buffers_[current_frame_].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphics_pipeline_);
 
