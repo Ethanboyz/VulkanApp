@@ -26,3 +26,4 @@ callgrind.*
 /.cache/
 .*
 !.gitignore
+TODO.*

@@ -14,7 +14,12 @@ link_directories("$ENV{VULKAN_SDK}/lib")
 
 find_package(Slang CONFIG HINTS "$ENV{VULKAN_SDK}/lib/cmake")
 
-add_executable(Vulkan src/main.cpp)
+add_executable(Vulkan
+    src/main.cpp
+    src/vulkan_app.cpp
+)
+include_directories(include)
+
 target_compile_definitions(Vulkan PRIVATE VULKAN_HPP_NO_STRUCT_CONSTRUCTORS)
 target_compile_options(Vulkan PRIVATE
     -Wall
